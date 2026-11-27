@@ -2,10 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeToken } from './token.mjs';
-
-const isWindows = process.platform === 'win32';
-const localBin = path.resolve(process.cwd(), 'bin', isWindows ? 'yt-dlp.exe' : 'yt-dlp');
-const YTDLP = fs.existsSync(localBin) ? localBin : 'yt-dlp';
+import { ensureYtDlp } from './ytdlp.mjs';
 
 // The bundled yt-dlp is a self-extracting binary; keep its temp files inside
 // the project so it does not depend on the system temp drive having space.
@@ -40,9 +37,9 @@ function release() {
   }
 }
 
-function runYtDlp(args, timeout = 30000) {
+function spawnYtDlp(bin, args, timeout = 30000) {
   return new Promise((resolve, reject) => {
-    const child = spawn(YTDLP, args, {
+    const child = spawn(bin, args, {
       windowsHide: true,
       env: { ...process.env, TMP: TEMP_DIR, TEMP: TEMP_DIR, TMPDIR: TEMP_DIR },
     });
@@ -64,6 +61,17 @@ function runYtDlp(args, timeout = 30000) {
       else reject(new Error(stderr.trim().split('\n').pop() || 'Audio lookup failed'));
     });
   });
+}
+
+async function runYtDlp(args, timeout = 30000) {
+  const bin = await ensureYtDlp();
+  try {
+    return await spawnYtDlp(bin, args, timeout);
+  } catch (error) {
+    // The binary was resolved but vanished (or was replaced); heal once.
+    if (error.code !== 'ENOENT') throw error;
+    return spawnYtDlp(await ensureYtDlp({ force: true }), args, timeout);
+  }
 }
 
 function directTarget(track) {
@@ -180,6 +188,48 @@ export async function youtubePlaylist(url, limit = 60) {
     tracks,
     total: entries.length,
   };
+}
+
+// Search fallback used when the Lavalink node is unreachable: yt-dlp talks to
+// YouTube directly, so browsing and playback keep working without a node.
+export async function searchYouTube(query, limit = 10) {
+  const stdout = await runYtDlp(
+    ['-J', '--flat-playlist', '--no-warnings', '--ignore-errors', `ytsearch${Math.max(limit, 5)}:${query}`],
+    30000,
+  );
+  const data = JSON.parse(stdout);
+  const entries = Array.isArray(data.entries) ? data.entries : [];
+  return entries
+    .filter((entry) => entry && entry.id && entry.title)
+    .slice(0, limit)
+    .map((entry) => {
+      const artist =
+        String(entry.channel || entry.uploader || 'YouTube')
+          .replace(/\s*-\s*Topic$/i, '')
+          .replace(/\s*VEVO$/i, '')
+          .trim() || 'YouTube';
+      const thumbnails = Array.isArray(entry.thumbnails) ? entry.thumbnails : [];
+      const uri = `https://www.youtube.com/watch?v=${entry.id}`;
+      return {
+        id: `yt:${entry.id}`,
+        stream: makeToken({
+          t: entry.title,
+          a: artist,
+          s: 'ytmusic',
+          u: uri,
+          i: entry.id,
+        }),
+        title: String(entry.title),
+        artist,
+        duration: Math.round((Number(entry.duration) || 0) * 1000),
+        artwork: thumbnails[thumbnails.length - 1]?.url || `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`,
+        source: 'ytmusic',
+        sourceName: 'YouTube Music',
+        uri,
+        encoded: null,
+        isStream: false,
+      };
+    });
 }
 
 export async function searchSoundCloud(query, limit = 10) {

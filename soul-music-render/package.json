@@ -8,6 +8,8 @@
     "build": "vite build",
     "check": "tsc --noEmit",
     "start": "node server/index.mjs",
+    "postinstall": "node scripts/fetch-ytdlp.mjs",
+    "fetch:ytdlp": "node scripts/fetch-ytdlp.mjs",
     "android:add": "cap add android",
     "android:sync": "npm run build && cap sync android",
     "android:build": "node scripts/android-build.mjs",

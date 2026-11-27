@@ -5,7 +5,8 @@ import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { CATEGORIES, COLLECTIONS, NODE, PLAYLISTS, SEARCHABLE, SOURCES } from './config.mjs';
 import { nodeInfo, resolveUrl, searchLavalink, unavailableMessage } from './lavalink.mjs';
-import { resolveAudio, searchSoundCloud } from './audio.mjs';
+import { resolveAudio, searchSoundCloud, searchYouTube } from './audio.mjs';
+import { ensureYtDlp, ytdlpStatus } from './ytdlp.mjs';
 import { getLyrics } from './lyrics.mjs';
 import { decodeToken } from './token.mjs';
 import { accountRouter } from './account.mjs';
@@ -36,19 +37,40 @@ function cached(key, ttl, producer) {
   return value;
 }
 
+// The free Lavalink node goes down now and then. yt-dlp can search YouTube on
+// its own, so keep browsing usable while the node is unavailable instead of
+// returning an empty page.
+function youtubeFallback(query, limit) {
+  return cached(`yt-dlp-search:${limit}:${query.toLowerCase()}`, 3 * 60_000, () =>
+    searchYouTube(query, limit),
+  );
+}
+
+async function fallbackSearch(query, limit) {
+  try {
+    const tracks = await youtubeFallback(query, Math.max(limit, 10));
+    if (tracks.length) return { tracks: tracks.slice(0, limit), unavailable: false, reason: null };
+  } catch {
+    /* no fallback available either */
+  }
+  return null;
+}
+
 async function searchSource(sourceId, query, limit = 12) {
   if (sourceId === 'soundcloud') {
     try {
       const tracks = await searchSoundCloud(query, limit);
       return { tracks, unavailable: false, reason: null };
     } catch (error) {
-      return { tracks: [], unavailable: true, reason: error.message };
+      return (await fallbackSearch(query, limit)) || { tracks: [], unavailable: true, reason: error.message };
     }
   }
   try {
-    return await searchLavalink(sourceId, query, limit);
+    const result = await searchLavalink(sourceId, query, limit);
+    if (!result.unavailable && result.tracks.length) return result;
+    return (await fallbackSearch(query, limit)) || result;
   } catch (error) {
-    return { tracks: [], unavailable: true, reason: error.message };
+    return (await fallbackSearch(query, limit)) || { tracks: [], unavailable: true, reason: error.message };
   }
 }
 
@@ -137,18 +159,49 @@ async function buildFeed(categoryId) {
   };
 }
 
-app.get('/api/health', async (_req, res) => {
+let nodeDownUntil = 0;
+let nodeError = null;
+
+async function nodeHealth() {
+  if (Date.now() < nodeDownUntil) return { ok: false, error: nodeError || 'Lavalink node unreachable' };
   try {
     const info = await cached('node-info', 60_000, nodeInfo);
-    res.json({
-      ok: true,
-      node: NODE.label,
-      version: info.version?.semver || '4.x',
-      sources: SOURCES.filter((source) => !source.hidden).map((source) => source.name),
-    });
+    nodeDownUntil = 0;
+    nodeError = null;
+    return { ok: true, version: info.version?.semver || '4.x' };
   } catch (error) {
-    res.status(503).json({ ok: false, node: NODE.label, error: error.message });
+    nodeDownUntil = Date.now() + 60_000;
+    nodeError = error.message;
+    return { ok: false, error: error.message };
   }
+}
+
+app.get('/api/health', async (_req, res) => {
+  const sources = SOURCES.filter((source) => !source.hidden).map((source) => source.name);
+  const node = await nodeHealth();
+  if (node.ok) {
+    return res.json({
+      ok: true,
+      mode: 'lavalink',
+      node: NODE.label,
+      version: node.version,
+      sources,
+      ytdlp: ytdlpStatus(),
+    });
+  }
+  const direct = ytdlpStatus().ok || (await ensureYtDlp().then(() => true).catch(() => false));
+  if (direct) {
+    return res.json({
+      ok: true,
+      mode: 'ytdlp',
+      node: NODE.label,
+      version: 'direct',
+      sources,
+      ytdlp: ytdlpStatus(),
+      nodeError: node.error,
+    });
+  }
+  res.status(503).json({ ok: false, node: NODE.label, error: node.error, ytdlp: ytdlpStatus() });
 });
 
 app.post('/api/import/playlist', async (req, res) => {
@@ -329,4 +382,11 @@ const HOST = process.env.HOST || '0.0.0.0';
 app.listen(PORT, HOST, () => {
   console.log(`[api] Soul music server on http://${HOST}:${PORT}`);
   console.log(`[api] Lavalink node: ${NODE.label} (${NODE.secure ? 'https' : 'http'}://${NODE.host}:${NODE.port})`);
+});
+
+// Playback needs yt-dlp, and hosts like Render do not ship it. Resolve (or
+// download) it at boot so the first play does not have to wait for 30 MB.
+ensureYtDlp().catch((error) => {
+  console.warn(`[yt-dlp] unavailable: ${error.message}`);
+  console.warn('[yt-dlp] /api/stream will fail until the binary can be installed');
 });

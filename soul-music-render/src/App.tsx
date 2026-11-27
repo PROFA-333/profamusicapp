@@ -170,7 +170,13 @@ export default function App() {
         <div className="side-node">
           <span className={cx('dot', health?.ok && 'is-live')} />
           <div>
-            <span>{health?.ok ? `Lavalink ${health.version}` : 'Connecting to Lavalink…'}</span>
+            <span>
+              {health?.ok
+                ? health.mode === 'ytdlp'
+                  ? 'yt-dlp direct mode'
+                  : `Lavalink ${health.version}`
+                : 'Connecting to Lavalink…'}
+            </span>
             <span className="side-node-sub">12 catalogs · streamed in app</span>
           </div>
         </div>

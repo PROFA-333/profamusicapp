@@ -5,11 +5,11 @@ loadEnv();
 // Lavalink node configuration. Defaults point at the hosted node from the
 // public list; override with environment variables to use your own node.
 export const NODE = {
-  host: process.env.LAVALINK_HOST || 'freelavalinkvinster.in',
+  host: process.env.LAVALINK_HOST || 'lavalink.jirayu.net',
   port: Number(process.env.LAVALINK_PORT || 443),
   password: process.env.LAVALINK_PASSWORD || 'youshallnotpass',
   secure: String(process.env.LAVALINK_SECURE ?? 'true') !== 'false',
-  label: process.env.LAVALINK_LABEL || 'freelavalinkvinster.in',
+  label: process.env.LAVALINK_LABEL || 'lavalink.jirayu.net',
 };
 
 export const BASE = `${NODE.secure ? 'https' : 'http'}://${NODE.host}:${NODE.port}`;

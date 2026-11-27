@@ -66,6 +66,7 @@ export interface LyricsData {
 
 export interface Health {
   ok: boolean;
+  mode?: 'lavalink' | 'ytdlp';
   node: string;
   version: string;
   sources: string[];
