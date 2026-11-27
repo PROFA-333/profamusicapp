@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: soul-music
+    runtime: node
+    plan: starter # always-on; free tier spins down after inactivity
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
+      - key: APP_BASE_URL
+        sync: false # set to your Render URL, e.g. https://soul-music.onrender.com
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+    disk:
+      name: soul-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
